@@ -146,7 +146,7 @@ if __name__ == "__main__":
     task_config = args.task_config
     expert_data_num = args.expert_data_num
 
-    load_dir = os.path.join("../../data", str(task_name), str(task_config), "data")
+    load_dir = os.path.join("/mnt/pfs/users/jiangnan.shao/code/RoboTwin/datasets/aloha-agilex", str(task_name), "dataset3/aloha-agilex/", str(task_name), str(task_config), "data")
 
     print(f"read data from path: {load_dir}")
     begin = data_transform(
@@ -157,7 +157,7 @@ if __name__ == "__main__":
     tokenizer, text_encoder = None, None
     for idx in range(expert_data_num):
         print(f"Processing Language: {idx}", end="\r")
-        data_file_path = (f"../../data/{task_name}/{task_config}/instructions/episode{idx}.json")
+        data_file_path = (f"/mnt/pfs/users/jiangnan.shao/code/RoboTwin/datasets/aloha-agilex/{task_name}/dataset3/aloha-agilex/{task_name}/{task_config}/instructions/episode{idx}.json")
         target_dir = (f"processed_data/{task_name}-{task_config}-{expert_data_num}/episode_{idx}")
         tokenizer, text_encoder = encode_lang(
             DATA_FILE_PATH=data_file_path,

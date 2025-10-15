@@ -8,6 +8,7 @@ envs/curobo
 viewer_show.*
 weights/
 eval_video/
+datasets*/
 
 # eval result
 eval_result/
