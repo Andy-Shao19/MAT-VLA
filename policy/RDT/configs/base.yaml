@@ -19,7 +19,7 @@ dataset:
   # read by the consumer with new data
 
   # The path to the buffer (at least 400GB)
-  buf_path: /shared_disk/users/jiangnan.shao/cache/
+  buf_path: /share/project/liyuanyuan/code/MAT-VLA/cache
   # The number of chunks in the buffer
   buf_num_chunks: 512
   # The number of samples (step rather than episode) in each chunk
@@ -41,8 +41,10 @@ model:
   lang_adaptor: mlp2x_gelu
   img_adaptor: mlp2x_gelu
   state_adaptor: mlp3x_gelu
+  extra_condition_adapter: mlp2x_gelu  # 新增条件的adaptor
   lang_token_dim: 4096
   img_token_dim: 1152
+  extra_token_dim: 14  # 新增条件的维度
   # Dim of action or proprioception vector
   # A `state` refers to an action or a proprioception vector
   state_token_dim: 128

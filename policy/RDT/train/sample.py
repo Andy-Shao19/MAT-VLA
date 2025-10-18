@@ -46,6 +46,7 @@ def log_sample_res(
                 input_ids=batch["input_ids"], attention_mask=lang_attn_mask)["last_hidden_state"].detach())
 
             pred_actions = rdt.predict_action(
+                extra_cond=batch["extra_cond"],  # 新增这一行
                 lang_tokens=text_embeds,
                 lang_attn_mask=lang_attn_mask,
                 img_tokens=image_embeds,

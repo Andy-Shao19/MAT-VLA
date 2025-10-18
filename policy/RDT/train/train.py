@@ -163,6 +163,7 @@ def train(args, logger):
             lang_token_dim=config["model"]["lang_token_dim"],
             img_token_dim=config["model"]["img_token_dim"],
             state_token_dim=config["model"]["state_token_dim"],
+            extra_token_dim=config["model"]["extra_token_dim"],  # 新增条件的维度
             max_lang_cond_len=config["dataset"]["tokenizer_max_length"],
             img_cond_len=img_cond_len,
             img_pos_embed_config=[
