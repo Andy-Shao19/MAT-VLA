@@ -28,6 +28,7 @@ class RDTRunner(nn.Module,
                  lang_token_dim,
                  img_token_dim,
                  state_token_dim,
+                 extra_token_dim,
                  max_lang_cond_len,
                  img_cond_len,
                  lang_pos_embed_config=None,
@@ -61,6 +62,13 @@ class RDTRunner(nn.Module,
             config['state_adaptor'],
             in_features=state_token_dim * 2,  # state + state mask (indicator)
             out_features=hidden_size)
+
+        # 新增的条件适配器
+        self.extra_condition_adapter = self.build_condition_adapter(
+            config['extra_condition_adapter'],
+            in_features=extra_token_dim,
+            out_features=hidden_size
+        )
 
         # Create the noise scheduler
         noise_scheduler_config = config['noise_scheduler']
@@ -107,19 +115,21 @@ class RDTRunner(nn.Module,
 
         return projector
 
-    def adapt_conditions(self, lang_tokens, img_tokens, state_tokens):
+    def adapt_conditions(self, extra_cond, lang_tokens, img_tokens, state_tokens):
         '''
+        extra_cond: (batch_size, extra_len, extra_token_dim)
         lang_tokens: (batch_size, lang_len, lang_token_dim)
         img_tokens: (batch_size, img_len, img_token_dim)
         state_tokens: (batch_size, state_len, state_token_dim)
-        
-        return: adpated (..., hidden_size) for all input tokens
         '''
-        adpated_lang = self.lang_adaptor(lang_tokens)
-        adpated_img = self.img_adaptor(img_tokens)
-        adpated_state = self.state_adaptor(state_tokens)
-
-        return adpated_lang, adpated_img, adpated_state
+        # 先分别适配
+        adapted_extra = self.extra_condition_adapter(extra_cond)  # (batch_size, extra_len, hidden_size)
+        adapted_lang = self.lang_adaptor(lang_tokens)             # (batch_size, lang_len, hidden_size)
+        adapted_img = self.img_adaptor(img_tokens)
+        adapted_state = self.state_adaptor(state_tokens)
+        # 拼接：extra在前，语言在后
+        adapted_lang = torch.cat([adapted_extra, adapted_lang], dim=1)
+        return adapted_lang, adapted_img, adapted_state
 
     def conditional_sample(self, lang_cond, lang_attn_mask, img_cond, state_traj, action_mask, ctrl_freqs):
         '''
@@ -168,9 +178,10 @@ class RDTRunner(nn.Module,
         return noisy_action
 
     # ========= Train  ============
-    def compute_loss(self, lang_tokens, lang_attn_mask, img_tokens, state_tokens, action_gt, action_mask,
-                     ctrl_freqs) -> torch.Tensor:
+    def compute_loss(self, extra_cond, lang_tokens, lang_attn_mask, img_tokens, state_tokens, action_gt, action_mask,
+                 ctrl_freqs) -> torch.Tensor:
         '''
+        extra_cond: (batch_size, extra_len, extra_token_dim)
         lang_tokens: (batch_size, lang_len, lang_token_dim)
         lang_attn_mask: (batch_size, lang_len), a mask for valid language tokens,
             which should be True-False bool tensor.
@@ -198,7 +209,9 @@ class RDTRunner(nn.Module,
         action_mask = action_mask.expand(-1, state_action_traj.shape[1], -1)
         state_action_traj = torch.cat([state_action_traj, action_mask], dim=2)
         # Align the dimension with the hidden size
-        lang_cond, img_cond, state_action_traj = self.adapt_conditions(lang_tokens, img_tokens, state_action_traj)
+        lang_cond, img_cond, state_action_traj = self.adapt_conditions(
+            extra_cond, lang_tokens, img_tokens, state_action_traj
+        )
         # Predict the denoised result
         pred = self.model(state_action_traj, ctrl_freqs, timesteps, lang_cond, img_cond, lang_mask=lang_attn_mask)
 
@@ -213,8 +226,9 @@ class RDTRunner(nn.Module,
         return loss
 
     # ========= Inference  ============
-    def predict_action(self, lang_tokens, lang_attn_mask, img_tokens, state_tokens, action_mask, ctrl_freqs):
+    def predict_action(self, extra_cond, lang_tokens, lang_attn_mask, img_tokens, state_tokens, action_mask, ctrl_freqs):
         '''
+        extra_cond: (batch_size, extra_len, extra_token_dim)
         lang_tokens: (batch_size, lang_len, lang_token_dim)
         lang_attn_mask: (batch_size, lang_len), a mask for valid language tokens,
             which should be True-False bool tensor.
@@ -228,7 +242,7 @@ class RDTRunner(nn.Module,
         '''
         # Prepare the state and conditions
         state_tokens = torch.cat([state_tokens, action_mask], dim=2)
-        lang_cond, img_cond, state_traj = self.adapt_conditions(lang_tokens, img_tokens, state_tokens)
+        lang_cond, img_cond, state_traj = self.adapt_conditions(extra_cond, lang_tokens, img_tokens, state_tokens)
 
         # Run sampling
         action_pred = self.conditional_sample(
