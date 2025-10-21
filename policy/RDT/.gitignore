@@ -1,4 +1,4 @@
-processed_data/
+processed_data*/
 training_data/
 checkpoints/
 model_config/*.yml

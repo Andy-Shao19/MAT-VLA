@@ -246,6 +246,49 @@ class HDF5VLADataset:
             cam_left_wrist_mask = cam_high_mask.copy()
             cam_right_wrist = parse_img("cam_right_wrist")
             cam_right_wrist_mask = cam_high_mask.copy()
+            
+            # Parse the dual_endpose
+            dual_endpose = f["dual_endpose"][step_id:step_id + self.CHUNK_SIZE]
+            # 若长度不足 CHUNK_SIZE，使用最后一帧填充到固定长度，保证后续索引安全
+            if dual_endpose.shape[0] == 0:
+                return False, None
+            if dual_endpose.shape[0] < self.CHUNK_SIZE:
+                dual_endpose = np.concatenate(
+                    [dual_endpose, np.tile(dual_endpose[-1:], (self.CHUNK_SIZE - dual_endpose.shape[0], 1))],
+                    axis=0
+                )
+            # 与 qpos/action 的按量纲缩放保持一致（当前缩放为 1，不改变值）
+            dual_endpose = dual_endpose / np.array(
+                [[1 for _ in range(left_arm_dim[0] + 1 + right_arm_dim[0] + 1)]]
+            )
+            
+            LABEL_SIZE = 8
+            NUM_LABEL  = self.CHUNK_SIZE // LABEL_SIZE
+
+            def bucketize(delta, pos_eps=0.02, rot_eps=0.05, grip_eps=0.01):
+                """Map continuous delta to {0,1,2} where 0: negative, 1: neutral, 2: positive."""
+                out = np.ones_like(delta, dtype=np.int64)  # 中性默认 1
+                idx = np.arange(delta.shape[-1]) % 7
+                pos_mask  = idx < 3           # xyz
+                rot_mask  = (idx >= 3) & (idx < 6)  # rpy
+                grip_mask = idx == 6          # gripper
+                out[pos_mask  & (delta >  pos_eps)]  = 2
+                out[pos_mask  & (delta < -pos_eps)]  = 0
+                out[rot_mask & (delta >  rot_eps)]  = 2
+                out[rot_mask & (delta < -rot_eps)]  = 0
+                out[grip_mask & (delta >  grip_eps)] = 2
+                out[grip_mask & (delta < -grip_eps)] = 0
+                return out
+
+
+            traj_label = []
+            for i in range(NUM_LABEL):
+                s0 = i * LABEL_SIZE
+                s1 = s0 + LABEL_SIZE - 1
+                delta = dual_endpose[s1] - dual_endpose[s0]
+                traj_label.append(bucketize(delta))
+            traj_label = np.stack(traj_label, axis=0)  # (8,14)
+            
 
             # Return the resulting sample
             # For unavailable images, return zero-shape arrays, i.e., (IMG_HISORY_SIZE, 0, 0, 0)
@@ -265,6 +308,7 @@ class HDF5VLADataset:
                 "cam_left_wrist_mask": cam_left_wrist_mask,
                 "cam_right_wrist": cam_right_wrist,
                 "cam_right_wrist_mask": cam_right_wrist_mask,
+                "traj_label": traj_label
             }
 
     def parse_hdf5_file_state_only(self, file_path):

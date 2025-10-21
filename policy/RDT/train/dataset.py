@@ -257,6 +257,7 @@ class VLAConsumerDataset(Dataset):
                         res["cam_left_wrist"],
                         res["cam_left_wrist_mask"],
                     ]
+                    traj_label = res["traj_label"]
                     state_std = res["state_std"]
                     state_mean = res["state_mean"]
                     state_norm = res["state_norm"]
@@ -292,6 +293,11 @@ class VLAConsumerDataset(Dataset):
                 # Randomly mask the states by the mean state
                 data_dict["states"] = (states if random.random() > self.cond_mask_prob else ds_state_mean)
                 data_dict["actions"] = actions
+                
+                # add traj_label
+                if self.use_hdf5:
+                   data_dict["traj_label"] = traj_label
+                
                 data_dict["state_elem_mask"] = (state_elem_mask if random.random() > self.cond_mask_prob else
                                                 np.zeros_like(state_elem_mask))
 
@@ -392,6 +398,10 @@ class VLAConsumerDataset(Dataset):
                     if isinstance(v, np.ndarray):
                         data_dict[k] = torch.from_numpy(v)
 
+                if "traj_label" in data_dict and isinstance(data_dict["traj_label"], torch.Tensor):
+                    # ensure long dtype
+                    data_dict["traj_label"] = data_dict["traj_label"].long()
+
                 for k, v in data_dict.items():
                     assert not isinstance(v, np.ndarray), f"key: {k}, value: {v}"
                     # data_dict[k] = torch.from_numpy(v)
@@ -426,6 +436,7 @@ class DataCollatorForVLAConsumerDataset(object):
             "images": [],
             "data_indices": [],
             "ctrl_freqs": [],
+            "traj_label": [],
         }
         input_ids = []
         lang_embeds = []
@@ -455,11 +466,19 @@ class DataCollatorForVLAConsumerDataset(object):
             batch["images"].append(torch.stack(instance["images"], dim=0))
             batch["data_indices"].append(instance["data_idx"])
             batch["ctrl_freqs"].append(instance["ctrl_freq"])
+            
+            if "traj_label" in instance:
+                diff_tensor = (instance["traj_label"] if isinstance(instance["traj_label"], torch.Tensor)
+                               else torch.from_numpy(instance["traj_label"]))
+                batch["traj_label"].append(diff_tensor.long())
 
         keys_to_stack = ["states", "actions", "state_elem_mask", "state_norm", "images"]
         for key in keys_to_stack:
             batch[key] = torch.stack(batch[key], dim=0)
-
+            
+        if len(batch["traj_label"]) > 0:
+            batch["traj_label"] = torch.stack(batch["traj_label"], dim=0)
+            
         batch["ctrl_freqs"] = torch.tensor(batch["ctrl_freqs"])
 
         if len(input_ids) > 0:
