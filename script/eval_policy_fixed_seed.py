@@ -261,13 +261,38 @@ def eval_policy(task_name,
         instruction = np.random.choice(results[0][instruction_type])
         TASK_ENV.set_instruction(instruction=instruction)
 
+        # if TASK_ENV.eval_video_path is not None:
+        #     ffmpeg = subprocess.Popen(
+        #         [
+        #             "ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo",
+        #             "-pixel_format", "rgb24", "-video_size", video_size,
+        #             "-framerate", "10", "-i", "-", "-pix_fmt", "yuv420p",
+        #             "-vcodec", "libx264", "-crf", "23",
+        #             f"{TASK_ENV.eval_video_path}/episode{TASK_ENV.test_num}.mp4",
+        #         ],
+        #         stdin=subprocess.PIPE,
+        #     )
         if TASK_ENV.eval_video_path is not None:
             ffmpeg = subprocess.Popen(
                 [
-                    "ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo",
-                    "-pixel_format", "rgb24", "-video_size", video_size,
-                    "-framerate", "10", "-i", "-", "-pix_fmt", "yuv420p",
-                    "-vcodec", "libx264", "-crf", "23",
+                    "ffmpeg",
+                    "-y",
+                    "-loglevel",
+                    "error",
+                    "-f",
+                    "rawvideo",
+                    "-pixel_format",
+                    "rgb24",
+                    "-video_size",
+                    video_size,
+                    "-framerate",
+                    "10",
+                    "-i",
+                    "-",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-vcodec",
+                    "mpeg2video",
                     f"{TASK_ENV.eval_video_path}/episode{TASK_ENV.test_num}.mp4",
                 ],
                 stdin=subprocess.PIPE,

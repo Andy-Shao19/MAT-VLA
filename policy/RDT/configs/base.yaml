@@ -19,7 +19,7 @@ dataset:
   # read by the consumer with new data
 
   # The path to the buffer (at least 400GB)
-  buf_path: /shared_disk/users/jiangnan.shao/cache/
+  buf_path: /mnt/data-1/data/shaojiangnan/cache
   # The number of chunks in the buffer
   buf_num_chunks: 512
   # The number of samples (step rather than episode) in each chunk
