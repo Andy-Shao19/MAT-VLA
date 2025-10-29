@@ -209,6 +209,9 @@ def generate_vlm_data_with_sampling(hdf5_dir, instructions_dir, save_dir, task_n
         else:
             raise ValueError("Found no qpos that exceeds the threshold.")
 
+        if first_idx < 3:
+            first_idx = 3
+        
         sample_num = 100
         for sample_idx in range(sample_num):
             # 随机采样
@@ -267,14 +270,15 @@ def generate_vlm_data_with_sampling(hdf5_dir, instructions_dir, save_dir, task_n
 
             # 从 Robotwin 数据中提取图像
             image_paths = []
-            for cam_name in ["left_camera", "head_camera", "right_camera"]:
-                raw_img = image_dict[cam_name][start_idx]
+            for i in range(2):
+                time_step = start_idx-(2-i)
+                raw_img = image_dict["head_camera"][time_step]
                 img_bgr = to_bgr_image(raw_img)
 
                 image_path_to_save = f"{save_dir}/images/{task_name}/{task_level}/episode_{episode_idx}"
                 os.makedirs(image_path_to_save, exist_ok=True)
 
-                image_path = os.path.join(image_path_to_save, f"{start_idx}_{cam_name}.jpg")
+                image_path = os.path.join(image_path_to_save, f"{time_step}_head_camera.jpg")
                 ok = cv2.imwrite(image_path, img_bgr)
                 if not ok:
                     raise IOError(f"Failed to write image to {image_path}")
@@ -283,11 +287,11 @@ def generate_vlm_data_with_sampling(hdf5_dir, instructions_dir, save_dir, task_n
             # 构造每条数据的 `conversations` 部分
             conversation = {
                 "from": "human",
-                "value": f"<image>\nThis is the image of the left wrist camera\n<image>\nThis is the image of the head camera\n<image>\nThis is the image of the right camera.\n"
+                "value": f"<image>\nThis is the head camera image of the previous frame.\n<image>\nThis is the head camera image of the current frame.\n"
                         f"instruction: {instructions['seen'][sample_idx]}\n"
                         f"Please predict the sequence of 32 trajectory labels that the robotic arm will execute next based on the image and instructions. Each trajectory label contains 14 tokens, and the format of one trajectory label is "
                         f"[x_l, y_l, z_l, roll_l, pitch_l, yaw_l, gripper_l, x_r, y_r, z_r, roll_r, pitch_r, yaw_r, gripper_r]. "
-                        f"Please output them in order, using special tokens to represent: { ' '.join(special_tokens) }"
+                        f"Please output them in order, using special tokens to represent: { ' '.join(special_tokens) }."
             }
 
             conversation_gpt = {

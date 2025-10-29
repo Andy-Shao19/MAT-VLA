@@ -444,6 +444,7 @@ def train(args, logger):
                     action_gt=actions,
                     action_mask=state_elem_mask,
                     ctrl_freqs=ctrl_freqs,
+                    traj_label=batch["traj_label"]
                 )
 
                 accelerator.backward(loss)

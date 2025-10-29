@@ -236,14 +236,14 @@ if __name__ == "__main__":
     task_config = args.task_config
     expert_data_num = args.expert_data_num
 
-    # load_dir = os.path.join("/mnt/pfs/users/jiangnan.shao/code/RoboTwin/datasets/RoboTwin2.0/dataset", str(task_name), f"{task_config}_{expert_data_num}", "data")
+    load_dir = os.path.join("/mnt/pfs/users/jiangnan.shao/code/RoboTwin/datasets/RoboTwin2.0/dataset", str(task_name), f"{task_config}_{expert_data_num}", "data")
 
-    # print(f"read data from path: {load_dir}")
-    # begin = data_transform(
-    #     load_dir,
-    #     expert_data_num,
-    #     f"./processed_data_traj/{task_name}-{task_config}-{expert_data_num}",
-    # )
+    print(f"read data from path: {load_dir}")
+    begin = data_transform(
+        load_dir,
+        expert_data_num,
+        f"./processed_data_traj/{task_name}-{task_config}-{expert_data_num}",
+    )
     tokenizer, text_encoder = None, None
     for idx in range(expert_data_num):
         print(f"Processing Language: {idx}", end="\r")

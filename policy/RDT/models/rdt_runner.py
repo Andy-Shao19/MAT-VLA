@@ -20,10 +20,10 @@ class TrajLabelEncoder(nn.Module):
     Adds index 3 as **[MASK]** so训练时可以随机遮盖某些段。
     """
 
-    def __init__(self, hidden_size: int):
+    def __init__(self, lang_token_dim: int):
         super().__init__()
-        self.axis_emb = nn.ModuleList([nn.Embedding(4, hidden_size) for _ in range(14)])  # 0/1/2/3(mask)
-        self.seg_emb = nn.Embedding(8, hidden_size)  # segment positional
+        self.axis_emb = nn.ModuleList([nn.Embedding(4, lang_token_dim) for _ in range(14)])  # 0/1/2/3(mask)
+        self.seg_emb = nn.Embedding(8, lang_token_dim)  # segment positional
         nn.init.normal_(self.seg_emb.weight, std=0.02)
 
     def forward(self, label: torch.LongTensor):
@@ -76,7 +76,7 @@ class RDTRunner(nn.Module,
             dtype=dtype,
         )
         # -------- diff‑label encoder (trainable, small) --------
-        self.traj_label_encoder = TrajLabelEncoder(hidden_size)
+        self.traj_label_encoder = TrajLabelEncoder(lang_token_dim)
         # 随机遮盖概率（每个段）
         self.label_mask_p = 0.15  # per‑slot mask prob (on 8×14 grid)
         
