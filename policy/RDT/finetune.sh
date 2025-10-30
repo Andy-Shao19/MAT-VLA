@@ -63,7 +63,7 @@ export CUDA_VISIBLE_DEVICES=$CUDA_USE
 
 python -m data.compute_dataset_stat_hdf5 --task_name $CONFIG_NAME
 
-accelerate launch --main_process_port=28499  main.py \
+accelerate launch --main_process_port=28498  main.py \
     --deepspeed="./configs/zero2.json" \
     --pretrained_model_name_or_path=$PRETRAINED_MODEL_NAME \
     --pretrained_text_encoder_name_or_path=$TEXT_ENCODER_NAME \
