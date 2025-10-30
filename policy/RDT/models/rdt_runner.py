@@ -15,6 +15,41 @@ sys.path.append(os.path.join(current_file.parent))
 from hub_mixin import CompatiblePyTorchModelHubMixin
 from rdt.model import RDT
 
+class TrajLabelEncoder(nn.Module):
+    """Embeds 8×14 diff‑label tensor (values 0/1/2) into token seq.
+    Adds index 3 as **[MASK]** so训练时可以随机遮盖某些段。
+    """
+
+    def __init__(self, lang_token_dim: int):
+        super().__init__()
+        self.axis_emb = nn.ModuleList([nn.Embedding(4, lang_token_dim) for _ in range(14)])  # 0/1/2/3(mask)
+        self.seg_emb = nn.Embedding(8, lang_token_dim)  # segment positional
+        nn.init.normal_(self.seg_emb.weight, std=0.02)
+
+    def forward(self, label: torch.LongTensor):
+        """
+        label: (B, 8, 14) with ints in {0,1,2,3}; 3 = [MASK]
+        return: (B, 112, hidden_size)
+        """
+        # Ensure label is integer indices and on the same device as embeddings
+        if label.dtype != torch.long:
+            label = label.long()
+        emb_device = self.axis_emb[0].weight.device
+        if label.device != emb_device:
+            label = label.to(emb_device)
+
+        B, S, D = label.shape  # S=8, D=14
+        
+        tokens = []
+        for d in range(D):
+            tok = self.axis_emb[d](label[:, :, d])  # (B, S, H)
+            tokens.append(tok)
+        tokens = torch.stack(tokens, dim=2)  # (B, S, 14, H)
+        seg_pos = self.seg_emb.weight.to(tokens.device).unsqueeze(1)  # (8,1,H)
+        tokens = tokens + seg_pos  # broadcast on segment dim
+        tokens = tokens.view(B, -1, tokens.size(-1))  # (B,112,H)
+        return tokens
+
 
 class RDTRunner(nn.Module,
                 CompatiblePyTorchModelHubMixin,
@@ -48,7 +83,11 @@ class RDTRunner(nn.Module,
             img_pos_embed_config=img_pos_embed_config,
             dtype=dtype,
         )
-
+        # -------- diff‑label encoder (trainable, small) --------
+        self.traj_label_encoder = TrajLabelEncoder(lang_token_dim)
+        # 随机遮盖概率（每个段）
+        self.label_mask_p = 0.15  # per‑slot mask prob (on 8×14 grid)
+        
         # Create adpators for various conditional inputs
         self.lang_adaptor = self.build_condition_adapter(config['lang_adaptor'],
                                                          in_features=lang_token_dim,
@@ -169,7 +208,7 @@ class RDTRunner(nn.Module,
 
     # ========= Train  ============
     def compute_loss(self, lang_tokens, lang_attn_mask, img_tokens, state_tokens, action_gt, action_mask,
-                     ctrl_freqs) -> torch.Tensor:
+                     ctrl_freqs, traj_label=None) -> torch.Tensor:
         '''
         lang_tokens: (batch_size, lang_len, lang_token_dim)
         lang_attn_mask: (batch_size, lang_len), a mask for valid language tokens,
@@ -182,6 +221,20 @@ class RDTRunner(nn.Module,
         
         return: loss_value, a scalar tensor
         '''
+        # ----- integrate diff‑label tokens into language tokens -----
+        if traj_label is not None:
+            # ---------- 随机 mask 部分段 ----------
+            if self.training and self.label_mask_p > 0.0:
+                B = traj_label.size(0)
+                mask_choice = torch.rand(B, 8, 14, device=traj_label.device) < self.label_mask_p
+                traj_label = traj_label.clone()
+                traj_label[mask_choice] = 3  # 3 = [MASK]
+
+            traj_tok = self.traj_label_encoder(traj_label)  # (B,112,H)
+            traj_mask = torch.ones(traj_tok.shape[:-1], dtype=lang_attn_mask.dtype, device=lang_attn_mask.device)
+            lang_tokens = torch.cat([traj_tok, lang_tokens], dim=1)
+            lang_attn_mask = torch.cat([traj_mask, lang_attn_mask], dim=1)
+
         batch_size = lang_tokens.shape[0]
         device = lang_tokens.device
         # Sample noise that we'll add to the actions
@@ -213,7 +266,7 @@ class RDTRunner(nn.Module,
         return loss
 
     # ========= Inference  ============
-    def predict_action(self, lang_tokens, lang_attn_mask, img_tokens, state_tokens, action_mask, ctrl_freqs):
+    def predict_action(self, lang_tokens, lang_attn_mask, img_tokens, state_tokens, action_mask, ctrl_freqs, traj_label=None):
         '''
         lang_tokens: (batch_size, lang_len, lang_token_dim)
         lang_attn_mask: (batch_size, lang_len), a mask for valid language tokens,
@@ -228,6 +281,14 @@ class RDTRunner(nn.Module,
         '''
         # Prepare the state and conditions
         state_tokens = torch.cat([state_tokens, action_mask], dim=2)
+
+        if traj_label is not None:
+            diff_tok = self.traj_label_encoder(traj_label)
+            diff_mask = torch.ones(diff_tok.shape[:-1], dtype=lang_attn_mask.dtype, device=lang_attn_mask.device)
+            print("diff_tok.shape:", diff_tok.shape, "lang_tokens.shape:", lang_tokens.shape)
+            lang_tokens = torch.cat([diff_tok, lang_tokens], dim=1)
+            lang_attn_mask = torch.cat([diff_mask, lang_attn_mask], dim=1)
+
         lang_cond, img_cond, state_traj = self.adapt_conditions(lang_tokens, img_tokens, state_tokens)
 
         # Run sampling

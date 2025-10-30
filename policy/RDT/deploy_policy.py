@@ -33,7 +33,7 @@ def get_model(usr_args):  # keep
     return rdt
 
 
-def eval(TASK_ENV, model, observation):
+def eval(TASK_ENV, model, observation, traj_label):
     """x
     All the function interfaces below are just examples
     You can modify them according to your implementation
@@ -52,8 +52,11 @@ def eval(TASK_ENV, model, observation):
         model.set_language_instruction(instruction)
         model.update_observation_window(input_rgb_arr, input_state)
 
-    actions = model.get_action()  # Get Action according to observation chunk
-
+    start_time = time.time()
+    actions = model.get_action(traj_label=traj_label)  # Get Action according to observation chunk
+    end_time = time.time()
+    print("time2: ", end_time - start_time)
+    
     for action in actions:  # Execute each step of the action
         TASK_ENV.take_action(action)
         observation = TASK_ENV.get_obs()

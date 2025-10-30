@@ -197,13 +197,13 @@ class RDT:
             },
         })
 
-    def get_action(self, img_arr=None, state=None):
+    def get_action(self, img_arr=None, state=None, traj_label=None):
         assert (img_arr is None) ^ (state is None) == False, "input error"
         if (img_arr is not None) and (state is not None):
             self.update_observation_window(img_arr, state)
 
         with torch.inference_mode():
-            action_buffer = inference_fn(self.config, self.policy, self.lang_embeddings, self.observation_window).copy()
+            action_buffer = inference_fn(self.config, self.policy, self.lang_embeddings, self.observation_window, traj_label).copy()
 
         return action_buffer
 
@@ -236,7 +236,7 @@ class RDT:
 
 
 # RDT inference
-def inference_fn(config, policy, lang_embeddings, observation_window):
+def inference_fn(config, policy, lang_embeddings, observation_window, traj_label):
 
     # print(f"Start inference_thread_fn: t={t}")
     while True:
@@ -260,7 +260,7 @@ def inference_fn(config, policy, lang_embeddings, observation_window):
         proprio = proprio.unsqueeze(0)
 
         # actions shaped as [1, 64, 14] in format [left, right]
-        actions = (policy.step(proprio=proprio, images=images, text_embeds=lang_embeddings).squeeze(0).cpu().numpy())
+        actions = (policy.step(proprio=proprio, images=images, text_embeds=lang_embeddings, traj_label=traj_label).squeeze(0).cpu().numpy())
         # print(f"inference_actions: {actions.squeeze()}")
 
         # print(f"Model inference time: {time.time() - time1} s")

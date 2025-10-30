@@ -251,7 +251,7 @@ class RoboticDiffusionTransformerModel(object):
         return joints
 
     @torch.no_grad()
-    def step(self, proprio, images, text_embeds):
+    def step(self, proprio, images, text_embeds, traj_label):
         """
         Predict the next action chunk given the
         proprioceptive states, images, and instruction embeddings.
@@ -338,6 +338,7 @@ class RoboticDiffusionTransformerModel(object):
             state_tokens=states,
             action_mask=state_elem_mask.unsqueeze(1),
             ctrl_freqs=ctrl_freqs,
+            traj_label=traj_label
         )
         trajectory = self._unformat_action_to_joint(trajectory).to(torch.float32)
 

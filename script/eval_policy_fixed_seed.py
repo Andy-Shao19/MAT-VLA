@@ -1,6 +1,8 @@
+import json
 import sys
 import os
 import subprocess
+import time
 
 sys.path.append("./")
 sys.path.append(f"./policy")
@@ -18,6 +20,7 @@ from datetime import datetime
 import importlib
 import argparse
 import pdb
+import torch
 
 from generate_episode_instructions import *
 
@@ -170,6 +173,23 @@ def main(usr_args):
         st_seed = 100000 * (1 + seed)
         seeds = list(range(st_seed, st_seed + 50))
         print(f"\033[93mUsing default seed range starting from {st_seed}\033[0m")
+        
+    # 读取traj_label_gt.json文件
+    if seed_file:
+        base_dir = os.path.dirname(seed_file)
+        traj_label_json_file = os.path.join(base_dir, "traj_label_gt.json")
+    else:
+        traj_label_json_file = None
+    
+    if traj_label_json_file and os.path.isfile(traj_label_json_file):
+        try:
+            with open(traj_label_json_file, "r", encoding="utf-8") as f:
+                content = json.load(f)
+                traj_label_dict = content[0]
+            print(f"\033[96mLoaded trajectory labels from {traj_label_json_file}\033[0m")
+        except Exception as e:
+            print(f"\033[91mFailed to load {traj_label_json_file}: {e}\033[0m")
+            traj_label_dict = None
 
     suc_nums = []
     test_num = len(seeds)  # 测试数量改为种子数量
@@ -181,6 +201,7 @@ def main(usr_args):
                          args,
                          model,
                          seeds,  # 传入种子列表
+                         traj_label_dict,  # 传入轨迹标签字典
                          test_num=test_num,
                          video_size=video_size,
                          instruction_type=instruction_type)
@@ -203,6 +224,7 @@ def eval_policy(task_name,
                 args,
                 model,
                 seeds,  # 改为接收种子列表
+                traj_label_dict,  # 传入轨迹标签字典
                 test_num=50,
                 video_size=None,
                 instruction_type=None):
@@ -301,9 +323,36 @@ def eval_policy(task_name,
 
         succ = False
         reset_func(model)
+        
+        txt_list = traj_label_dict.get(str(now_seed))
+        if txt_list:
+            parts = txt_list.split('_')
+            # 去掉中括号并转换为整数列表
+            traj_label_list = []
+            for part in parts:
+                numbers = [int(x) for x in part.strip('[]').split()]
+                traj_label_list.append(numbers)
+        print("traj_label_list:", traj_label_list)
+
+        label_idx = 0
+        label_size = 8
+        max_label_idx = len(traj_label_list)//64 - 1
         while TASK_ENV.take_action_cnt < TASK_ENV.step_lim:
             observation = TASK_ENV.get_obs()
-            eval_func(TASK_ENV, model, observation)
+            if label_idx <= max_label_idx:
+                traj_label = np.stack(traj_label_list[label_idx*label_size: label_idx*label_size+8], axis=0)
+                # Convert to int64 for embedding and move to model device
+                traj_label = np.asarray(traj_label, dtype=np.int64)
+                traj_label = torch.from_numpy(traj_label).unsqueeze(0)  # shape: (1, S, H)
+                print("traj_label Shape:", traj_label.shape)
+            else:
+                traj_label = None
+
+            start_time = time.time()
+            eval_func(TASK_ENV, model, observation, traj_label)
+            end_time = time.time()
+            print("time1: ", end_time - start_time)
+            label_idx += 1
             if TASK_ENV.eval_success:
                 succ = True
                 break
