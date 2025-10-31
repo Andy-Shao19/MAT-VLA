@@ -52,6 +52,8 @@ def log_sample_res(
                 state_tokens=states,
                 action_mask=state_elem_mask.unsqueeze(1),
                 ctrl_freqs=ctrl_freqs,
+                traj_label=batch["traj_label"],
+                
             )
 
             num_steps = pred_actions.shape[1]
