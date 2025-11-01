@@ -163,8 +163,10 @@ def load_hdf5(dataset_path):
         left_endpose_cam = []
         right_endpose_cam = []
         for i in range(left_endpose_world.shape[0]):
-            left_6d_cam = world_to_camera_transform(left_endpose_world[i], head_cam_extrinsic[i])
-            right_6d_cam = world_to_camera_transform(right_endpose_world[i], head_cam_extrinsic[i])
+            # left_6d_cam = world_to_camera_transform(left_endpose_world[i], head_cam_extrinsic[i])
+            # right_6d_cam = world_to_camera_transform(right_endpose_world[i], head_cam_extrinsic[i])
+            left_6d_cam = left_endpose_world[i]
+            right_6d_cam = right_endpose_world[i]
             left_6d_cam = np.concatenate([left_6d_cam, [left_gripper_endpose[i]]])
             right_6d_cam = np.concatenate([right_6d_cam, [right_gripper_endpose[i]]])
             left_endpose_cam.append(left_6d_cam)

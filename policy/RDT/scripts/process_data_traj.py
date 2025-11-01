@@ -105,8 +105,10 @@ def load_hdf5(dataset_path):
         left_endpose_cam = []
         right_endpose_cam = []
         for i in range(left_endpose_world.shape[0]):
-            left_6d_cam = world_to_camera_transform(left_endpose_world[i], head_cam_extrinsic[i])
-            right_6d_cam = world_to_camera_transform(right_endpose_world[i], head_cam_extrinsic[i])
+            # left_6d_cam = world_to_camera_transform(left_endpose_world[i], head_cam_extrinsic[i])
+            # right_6d_cam = world_to_camera_transform(right_endpose_world[i], head_cam_extrinsic[i])
+            left_6d_cam = left_endpose_world[i]
+            right_6d_cam = right_endpose_world[i]
             left_6d_cam = np.concatenate([left_6d_cam, [left_gripper_endpose[i]]])
             right_6d_cam = np.concatenate([right_6d_cam, [right_gripper_endpose[i]]])
             left_endpose_cam.append(left_6d_cam)
@@ -242,13 +244,13 @@ if __name__ == "__main__":
     begin = data_transform(
         load_dir,
         expert_data_num,
-        f"./processed_data_traj/{task_name}-{task_config}-{expert_data_num}",
+        f"./processed_data_traj_world/{task_name}-{task_config}-{expert_data_num}",
     )
     tokenizer, text_encoder = None, None
     for idx in range(expert_data_num):
         print(f"Processing Language: {idx}", end="\r")
         data_file_path = (f"/mnt/pfs/users/jiangnan.shao/code/RoboTwin/datasets/RoboTwin2.0/dataset/{task_name}/{task_config}_{expert_data_num}/instructions/episode{idx}.json")
-        target_dir = (f"processed_data_traj/{task_name}-{task_config}-{expert_data_num}/episode_{idx}")
+        target_dir = (f"processed_data_traj_world/{task_name}-{task_config}-{expert_data_num}/episode_{idx}")
         tokenizer, text_encoder = encode_lang(
             DATA_FILE_PATH=data_file_path,
             TARGET_DIR=target_dir,

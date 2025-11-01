@@ -14,33 +14,41 @@ current_file = Path(__file__)
 sys.path.append(os.path.join(current_file.parent))
 from hub_mixin import CompatiblePyTorchModelHubMixin
 from rdt.model import RDT
+    
+class TrajLabelEncoder(nn.Module):
+    """Embeds 8×14 diff‑label tensor (values 0/1/2) into token seq.
+    Adds index 3 as **[MASK]** so训练时可以随机遮盖某些段。
+    """
 
-# class TrajLabelEncoder(nn.Module):
-#     """Embeds 8×14 diff‑label tensor (values 0/1/2) into token seq.
-#     Adds index 3 as **[MASK]** so训练时可以随机遮盖某些段。
-#     """
+    def __init__(self, lang_token_dim: int):
+        super().__init__()
+        self.axis_emb = nn.ModuleList([nn.Embedding(4, lang_token_dim) for _ in range(14)])  # 0/1/2/3(mask)
+        self.seg_emb = nn.Embedding(8, lang_token_dim)  # segment positional
+        nn.init.normal_(self.seg_emb.weight, std=0.02)
 
-#     def __init__(self, lang_token_dim: int):
-#         super().__init__()
-#         self.axis_emb = nn.ModuleList([nn.Embedding(4, lang_token_dim) for _ in range(14)])  # 0/1/2/3(mask)
-#         self.seg_emb = nn.Embedding(8, lang_token_dim)  # segment positional
-#         nn.init.normal_(self.seg_emb.weight, std=0.02)
+    def forward(self, label: torch.LongTensor):
+        """
+        label: (B, 8, 14) with ints in {0,1,2,3}; 3 = [MASK]
+        return: (B, 112, hidden_size)
+        """
+        # Ensure label is integer indices and on the same device as embeddings
+        if label.dtype != torch.long:
+            label = label.long()
+        emb_device = self.axis_emb[0].weight.device
+        if label.device != emb_device:
+            label = label.to(emb_device)
 
-#     def forward(self, label: torch.LongTensor):
-#         """
-#         label: (B, 8, 14) with ints in {0,1,2,3}; 3 = [MASK]
-#         return: (B, 112, hidden_size)
-#         """
-#         B, S, D = label.shape  # S=8, D=14
-#         tokens = []
-#         for d in range(D):
-#             tok = self.axis_emb[d](label[:, :, d])  # (B, S, H)
-#             tokens.append(tok)
-#         tokens = torch.stack(tokens, dim=2)  # (B, S, 14, H)
-#         seg_pos = self.seg_emb.weight.unsqueeze(1)  # (8,1,H)
-#         tokens = tokens + seg_pos  # broadcast on segment dim
-#         tokens = tokens.view(B, -1, tokens.size(-1))  # (B,112,H)
-        # return tokens
+        B, S, D = label.shape  # S=8, D=14
+        
+        tokens = []
+        for d in range(D):
+            tok = self.axis_emb[d](label[:, :, d])  # (B, S, H)
+            tokens.append(tok)
+        tokens = torch.stack(tokens, dim=2)  # (B, S, 14, H)
+        seg_pos = self.seg_emb.weight.to(tokens.device).unsqueeze(1)  # (8,1,H)
+        tokens = tokens + seg_pos  # broadcast on segment dim
+        tokens = tokens.view(B, -1, tokens.size(-1))  # (B,112,H)
+        return tokens
 
 
 # ============================================================
