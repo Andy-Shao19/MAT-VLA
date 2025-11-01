@@ -24,7 +24,7 @@ data_type:
   depth: false
   pointcloud: false
   observer: false
-  endpose: false
+  endpose: true
   qpos: true
   mesh_segmentation: false
   actor_segmentation: false

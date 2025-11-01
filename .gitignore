@@ -9,6 +9,7 @@ viewer_show.*
 weights/
 eval_video/
 datasets*/
+test_qwen3.py
 
 # eval result
 eval_result/

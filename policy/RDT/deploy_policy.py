@@ -55,11 +55,14 @@ def eval(TASK_ENV, model, observation, traj_label):
     start_time = time.time()
     actions = model.get_action(traj_label=traj_label)  # Get Action according to observation chunk
     end_time = time.time()
-    print("time2: ", end_time - start_time)
+    print("模型推理时间: ", end_time - start_time)
     
+    dual_endpose_list = []
     for action in actions:  # Execute each step of the action
         TASK_ENV.take_action(action)
         observation = TASK_ENV.get_obs()
+        dual_endpose = observation['endpose']
+        dual_endpose_list.append(dual_endpose)
         obs = encode_obs(observation)
         input_rgb_arr, input_state = [
             obs["observation"]["head_camera"]["rgb"],
@@ -68,6 +71,7 @@ def eval(TASK_ENV, model, observation, traj_label):
         ], obs["agent_pos"]  # TODO
         model.update_observation_window(input_rgb_arr, input_state)  # Update Observation
 
+    return dual_endpose_list[-3:]
 
 def reset_model(
         model):  # Clean the model cache at the beginning of every evaluation episode, such as the observation window
