@@ -1,6 +1,8 @@
 import re, sys, os
 from pathlib import Path
 
+from typing import List
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -14,90 +16,138 @@ current_file = Path(__file__)
 sys.path.append(os.path.join(current_file.parent))
 from hub_mixin import CompatiblePyTorchModelHubMixin
 from rdt.model import RDT
-    
-class TrajLabelEncoder(nn.Module):
-    """Embeds 8×14 diff‑label tensor (values 0/1/2) into token seq.
-    Adds index 3 as **[MASK]** so训练时可以随机遮盖某些段。
-    """
 
-    def __init__(self, lang_token_dim: int):
+
+# -----------------------------------------------------------------------------
+#  LoRA helper – frozen base Linear + rank‑r delta
+# -----------------------------------------------------------------------------
+class LoRALinear(nn.Module):
+    """A frozen `nn.Linear` with a trainable low‑rank residual WΔ = B @ A."""
+
+    def __init__(self, base: nn.Linear, rank: int = 4, alpha: float = 1.0):
         super().__init__()
-        self.axis_emb = nn.ModuleList([nn.Embedding(4, lang_token_dim) for _ in range(14)])  # 0/1/2/3(mask)
-        self.seg_emb = nn.Embedding(8, lang_token_dim)  # segment positional
+        self.base = base
+        self.rank = rank
+        self.scaling = alpha / rank
+
+        self.lora_A = nn.Parameter(torch.zeros(rank, base.in_features))
+        self.lora_B = nn.Parameter(torch.zeros(base.out_features, rank))
+        nn.init.kaiming_uniform_(self.lora_A, a=math.sqrt(5))
+        nn.init.zeros_(self.lora_B)
+
+        # freeze original weight/bias
+        self.base.weight.requires_grad_(False)
+        if self.base.bias is not None:
+            self.base.bias.requires_grad_(False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:  # (B,*,in)
+        return self.base(x) + self.scaling * (x @ self.lora_A.T) @ self.lora_B.T
+
+# -----------------------------------------------------------------------------
+#  Trajectory‑label encoder  (112 token version)
+# -----------------------------------------------------------------------------
+class TrajLabelEncoder(nn.Module):
+    """Encode 8×14 ternary grid into 112 token embedding."""
+
+    def __init__(self, hidden: int):
+        super().__init__()
+        self.axis_emb = nn.ModuleList([nn.Embedding(4, hidden) for _ in range(14)])
+        self.seg_emb = nn.Embedding(8, hidden)
         nn.init.normal_(self.seg_emb.weight, std=0.02)
 
-    def forward(self, label: torch.LongTensor):
-        """
-        label: (B, 8, 14) with ints in {0,1,2,3}; 3 = [MASK]
-        return: (B, 112, hidden_size)
-        """
-        # Ensure label is integer indices and on the same device as embeddings
-        if label.dtype != torch.long:
-            label = label.long()
-        emb_device = self.axis_emb[0].weight.device
-        if label.device != emb_device:
-            label = label.to(emb_device)
-
-        B, S, D = label.shape  # S=8, D=14
-        
-        tokens = []
+    def forward(self, label: torch.LongTensor) -> torch.Tensor:  # (B,8,14)
+        label = label.long()
+        B, S, D = label.shape
+        toks = []
         for d in range(D):
-            tok = self.axis_emb[d](label[:, :, d])  # (B, S, H)
-            tokens.append(tok)
-        tokens = torch.stack(tokens, dim=2)  # (B, S, 14, H)
-        seg_pos = self.seg_emb.weight.to(tokens.device).unsqueeze(1)  # (8,1,H)
-        tokens = tokens + seg_pos  # broadcast on segment dim
-        tokens = tokens.view(B, -1, tokens.size(-1))  # (B,112,H)
-        return tokens
+            toks.append(self.axis_emb[d](label[:, :, d]))  # (B,8,H)
+        toks = torch.stack(toks, dim=2)  # (B,8,14,H)
+        toks = toks + self.seg_emb.weight.to(toks.device).unsqueeze(1)  # pos‑emb
+        return toks.view(B, -1, toks.size(-1))  # (B,112,H)
+    
+
+
+# class TrajLabelEncoder(nn.Module):
+#     """Embeds 8×14 diff‑label tensor (values 0/1/2) into token seq.
+#     Adds index 3 as **[MASK]** so训练时可以随机遮盖某些段。
+#     """
+
+#     def __init__(self, lang_token_dim: int):
+#         super().__init__()
+#         self.axis_emb = nn.ModuleList([nn.Embedding(4, lang_token_dim) for _ in range(14)])  # 0/1/2/3(mask)
+#         self.seg_emb = nn.Embedding(8, lang_token_dim)  # segment positional
+#         nn.init.normal_(self.seg_emb.weight, std=0.02)
+
+#     def forward(self, label: torch.LongTensor):
+#         """
+#         label: (B, 8, 14) with ints in {0,1,2,3}; 3 = [MASK]
+#         return: (B, 112, hidden_size)
+#         """
+#         # Ensure label is integer indices and on the same device as embeddings
+#         if label.dtype != torch.long:
+#             label = label.long()
+#         emb_device = self.axis_emb[0].weight.device
+#         if label.device != emb_device:
+#             label = label.to(emb_device)
+
+#         B, S, D = label.shape  # S=8, D=14
+        
+#         tokens = []
+#         for d in range(D):
+#             tok = self.axis_emb[d](label[:, :, d])  # (B, S, H)
+#             tokens.append(tok)
+#         tokens = torch.stack(tokens, dim=2)  # (B, S, 14, H)
+#         seg_pos = self.seg_emb.weight.to(tokens.device).unsqueeze(1)  # (8,1,H)
+#         tokens = tokens + seg_pos  # broadcast on segment dim
+#         tokens = tokens.view(B, -1, tokens.size(-1))  # (B,112,H)
+#         return tokens
 
 
 # ============================================================
 #   8-token  Segment-MLP  Trajectory-Label Encoder
 # ============================================================
+# class _SegmentTokeniser(nn.Module):
+#     """把单段 14 维 {0,1,2,3(mask)} → one-hot 42 → MLP → token_d"""
+
+#     def __init__(self, token_d: int, mid_d: int = 128):
+#         super().__init__()
+#         self.mlp = nn.Sequential(
+#             nn.Linear(14 * 3, mid_d),
+#             nn.GELU(),
+#             nn.Linear(mid_d, token_d),
+#         )
+
+#     def forward(self, seg: torch.LongTensor):  # (B,14)
+#         # 3 = mask → 0 向量 (信息缺失)
+#         seg = seg.clamp_max(2)
+#         onehot = torch.nn.functional.one_hot(seg, num_classes=3).flatten(-2)  # (B,42)
+#         # 关键：将输入转换为与权重相同的 dtype（避免 Float vs BFloat16 冲突）
+#         in_dtype = self.mlp[0].weight.dtype
+#         onehot = onehot.to(in_dtype)
+#         return self.mlp(onehot)  # (B, token_d)
 
 
-class _SegmentTokeniser(nn.Module):
-    """把单段 14 维 {0,1,2,3(mask)} → one-hot 42 → MLP → token_d"""
+# class TrajLabelEncoder(nn.Module):
+#     """8 段 ×14 离散标签 → 8 个 token，维度 = text hidden dim"""
 
-    def __init__(self, token_d: int, mid_d: int = 128):
-        super().__init__()
-        self.mlp = nn.Sequential(
-            nn.Linear(14 * 3, mid_d),
-            nn.GELU(),
-            nn.Linear(mid_d, token_d),
-        )
+#     def __init__(self, token_d: int):
+#         super().__init__()
+#         self.seg_embed = nn.Embedding(8, token_d)
+#         self.tokeniser = _SegmentTokeniser(token_d)
 
-    def forward(self, seg: torch.LongTensor):  # (B,14)
-        # 3 = mask → 0 向量 (信息缺失)
-        seg = seg.clamp_max(2)
-        onehot = torch.nn.functional.one_hot(seg, num_classes=3).flatten(-2)  # (B,42)
-        # 关键：将输入转换为与权重相同的 dtype（避免 Float vs BFloat16 冲突）
-        in_dtype = self.mlp[0].weight.dtype
-        onehot = onehot.to(in_dtype)
-        return self.mlp(onehot)  # (B, token_d)
-
-
-class TrajLabelEncoder(nn.Module):
-    """8 段 ×14 离散标签 → 8 个 token，维度 = text hidden dim"""
-
-    def __init__(self, token_d: int):
-        super().__init__()
-        self.seg_embed = nn.Embedding(8, token_d)
-        self.tokeniser = _SegmentTokeniser(token_d)
-
-    def forward(self, label: torch.LongTensor):  # (B,8,14)
-        if label.dtype != torch.long:
-            label = label.long()
-        B, S, _ = label.shape
-        out = []
-        for s in range(S):
-            tok = self.tokeniser(label[:, s, :])  # (B, token_d)
-            out.append(tok)
-        tokens = torch.stack(out, dim=1)  # (B,8,token_d)
-        # 关键：与 embedding 的 dtype 对齐后再相加
-        tokens = tokens.to(self.seg_embed.weight.dtype)
-        tokens = tokens + self.seg_embed.weight.unsqueeze(0)  # pos-embed
-        return tokens  # (B,8,token_d)
+#     def forward(self, label: torch.LongTensor):  # (B,8,14)
+#         if label.dtype != torch.long:
+#             label = label.long()
+#         B, S, _ = label.shape
+#         out = []
+#         for s in range(S):
+#             tok = self.tokeniser(label[:, s, :])  # (B, token_d)
+#             out.append(tok)
+#         tokens = torch.stack(out, dim=1)  # (B,8,token_d)
+#         # 关键：与 embedding 的 dtype 对齐后再相加
+#         tokens = tokens.to(self.seg_embed.weight.dtype)
+#         tokens = tokens + self.seg_embed.weight.unsqueeze(0)  # pos-embed
+#         return tokens  # (B,8,token_d)
 
 
 class RDTRunner(nn.Module,
@@ -131,12 +181,15 @@ class RDTRunner(nn.Module,
             img_pos_embed_config=img_pos_embed_config,
             dtype=dtype,
         )
-        # -------- diff‑label encoder (trainable, small) --------
-        self.traj_label_encoder = TrajLabelEncoder(lang_token_dim)
-        # 关键：将编码器权重转到与全局一致的 dtype
-        self.traj_label_encoder.to(dtype)
-        # 随机遮盖概率（每个段）
-        self.label_mask_p = 0  # per‑slot mask prob (on 8×14 grid)
+        
+        # ------------ label encoder -------------
+        self.traj_label_encoder = TrajLabelEncoder(lang_token_dim).to(dtype)
+        self.label_mask_p = 0  # light dropout; can be curriculum‑controlled
+        self.traj_gamma = 3.0    # amplitude scaler for label tokens
+        
+        # ------------ LoRA injection -------------
+        self.lora_params: List[nn.Parameter] = []
+        self._inject_lora(self.model, rank=4)
         
         # Create adpators for various conditional inputs
         self.lang_adaptor = self.build_condition_adapter(config['lang_adaptor'],
@@ -177,6 +230,19 @@ class RDTRunner(nn.Module,
                   [p.numel()
                    for p in self.img_adaptor.parameters()] + [p.numel() for p in self.state_adaptor.parameters()]))
 
+    # --------------------------------------------------
+    # LoRA auto‑injection
+    # --------------------------------------------------
+    def _inject_lora(self, module: nn.Module, rank: int = 4):
+        """Recursively replace cross‑attn q_proj with LoRALinear."""
+        for name, child in list(module.named_children()):
+            if isinstance(child, nn.Linear) and "q_proj" in name:
+                lora_layer = LoRALinear(child, rank=rank)
+                setattr(module, name, lora_layer)
+                self.lora_params.extend([lora_layer.lora_A, lora_layer.lora_B])
+            else:
+                self._inject_lora(child, rank)
+                
     def build_condition_adapter(self, projector_type, in_features, out_features):
         projector = None
         if projector_type == 'linear':
@@ -256,6 +322,16 @@ class RDTRunner(nn.Module,
 
         return noisy_action
 
+    def _concat_label(self, lang_tok, lang_mask, traj_label):
+        """Mask + encode + γ‑scale + concat."""
+        if self.training and self.label_mask_p > 0:
+            mask = torch.rand_like(traj_label.float()) < self.label_mask_p
+            traj_label = traj_label.clone()
+            traj_label[mask] = 3
+        tok = self.traj_label_encoder(traj_label) * self.traj_gamma
+        mk = torch.ones(tok.shape[:-1], dtype=lang_mask.dtype, device=lang_mask.device)
+        return torch.cat([tok, lang_tok], 1), torch.cat([mk, lang_mask], 1)
+    
     # ========= Train  ============
     def compute_loss(self, lang_tokens, lang_attn_mask, img_tokens, state_tokens, action_gt, action_mask,
                      ctrl_freqs, traj_label=None) -> torch.Tensor:
@@ -273,17 +349,9 @@ class RDTRunner(nn.Module,
         '''
         # ----- integrate diff‑label tokens into language tokens -----
         if traj_label is not None:
-            # ---------- 随机 mask 部分段 ----------
-            if self.training and self.label_mask_p > 0.0:
-                B = traj_label.size(0)
-                mask_choice = torch.rand(B, 8, 14, device=traj_label.device) < self.label_mask_p
-                traj_label = traj_label.clone()
-                traj_label[mask_choice] = 3  # 3 = [MASK]
-
-            traj_tok = self.traj_label_encoder(traj_label)  # (B,112,H)
-            traj_mask = torch.ones(traj_tok.shape[:-1], dtype=lang_attn_mask.dtype, device=lang_attn_mask.device)
-            lang_tokens = torch.cat([traj_tok, lang_tokens], dim=1)
-            lang_attn_mask = torch.cat([traj_mask, lang_attn_mask], dim=1)
+            lang_tokens, lang_attn_mask = self._concat_label(
+                lang_tokens, lang_attn_mask, traj_label
+            )
 
         batch_size = lang_tokens.shape[0]
         device = lang_tokens.device
@@ -329,14 +397,14 @@ class RDTRunner(nn.Module,
         
         return: (batch_size, horizon, action_dim), predicted action sequence
         '''
+        # ----- integrate diff‑label tokens into language tokens -----
+        if traj_label is not None:
+            lang_tokens, lang_attn_mask = self._concat_label(
+                lang_tokens, lang_attn_mask, traj_label
+            )
+        
         # Prepare the state and conditions
         state_tokens = torch.cat([state_tokens, action_mask], dim=2)
-
-        if traj_label is not None:
-            diff_tok = self.traj_label_encoder(traj_label)
-            diff_mask = torch.ones(diff_tok.shape[:-1], dtype=lang_attn_mask.dtype, device=lang_attn_mask.device)
-            lang_tokens = torch.cat([diff_tok, lang_tokens], dim=1)
-            lang_attn_mask = torch.cat([diff_mask, lang_attn_mask], dim=1)
 
         lang_cond, img_cond, state_traj = self.adapt_conditions(lang_tokens, img_tokens, state_tokens)
 

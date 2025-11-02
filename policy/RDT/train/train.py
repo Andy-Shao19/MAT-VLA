@@ -230,10 +230,31 @@ def train(args, logger):
         optimizer_class = torch.optim.AdamW
 
     # Optimizer creation
-    params_to_optimize = rdt.parameters()
+    # params_to_optimize = rdt.parameters()
+    # optimizer = optimizer_class(
+    #     params_to_optimize,
+    #     lr=args.learning_rate,
+    #     betas=(args.adam_beta1, args.adam_beta2),
+    #     weight_decay=args.adam_weight_decay,
+    #     eps=args.adam_epsilon,
+    # )
+    
+    # -------------------- LoRA warm-up: param groups & freeze --------------------
+    high_lr_params, backbone_params = [], []
+    # LoRA 参数在 rdt_runner 中注入到了 rdt.lora_params；同时保留标签编码器参数
+    lora_param_set = set([id(p) for p in rdt.lora_params]) if hasattr(rdt, "lora_params") else set()
+    for n, p in rdt.named_parameters():
+        is_traj_enc = ("traj_label_encoder" in n)
+        is_lora = (id(p) in lora_param_set) or n.endswith("lora_A") or n.endswith("lora_B")
+        if is_traj_enc or is_lora:
+            p.requires_grad_(True)
+            high_lr_params.append(p)  # 先用较高 LR
+        else:
+            p.requires_grad_(False)   # warm-up 阶段冻结
+            backbone_params.append(p)
+
     optimizer = optimizer_class(
-        params_to_optimize,
-        lr=args.learning_rate,
+        [{"params": high_lr_params, "lr": max(args.learning_rate, 5e-4)}],
         betas=(args.adam_beta1, args.adam_beta2),
         weight_decay=args.adam_weight_decay,
         eps=args.adam_epsilon,
@@ -405,6 +426,10 @@ def train(args, logger):
     )
     progress_bar.set_description("Steps")
 
+    # warm-up → joint 阶段切换
+    UNFREEZE_STEP = 1000   # 10% of 10k
+    backbone_unfrozen = False
+
     loss_for_log = {}
     for epoch in range(first_epoch, args.num_train_epochs):
 
@@ -461,6 +486,15 @@ def train(args, logger):
             if accelerator.sync_gradients:
                 progress_bar.update(1)
                 global_step += 1
+
+                # -------------- unfreeze backbone at 1k step --------------
+                if (not backbone_unfrozen) and global_step >= UNFREEZE_STEP:
+                    # 解冻 backbone 并动态加入优化器（低 LR）
+                    for p in backbone_params:
+                        p.requires_grad_(True)
+                    optimizer.add_param_group({"params": backbone_params, "lr": 1e-4})
+                    backbone_unfrozen = True
+                    logger.info(f">>> Backbone unfrozen at step {global_step}")
 
                 if global_step % args.checkpointing_period == 0:
                     save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
