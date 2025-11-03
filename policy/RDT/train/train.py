@@ -240,7 +240,7 @@ def train(args, logger):
     # )
     
     # -------------------- LoRA warm-up: param groups & freeze --------------------
-    high_lr_params, backbone_params = [], []
+    high_lr_params, low_lr_params = [], []
     # LoRA 参数在 rdt_runner 中注入到了 rdt.lora_params；同时保留标签编码器参数
     lora_param_set = set([id(p) for p in rdt.lora_params]) if hasattr(rdt, "lora_params") else set()
     for n, p in rdt.named_parameters():
@@ -250,11 +250,14 @@ def train(args, logger):
             p.requires_grad_(True)
             high_lr_params.append(p)  # 先用较高 LR
         else:
-            p.requires_grad_(False)   # warm-up 阶段冻结
-            backbone_params.append(p)
+            p.requires_grad_(True)
+            low_lr_params.append(p)    # 放进低 LR 用学习率冻结
 
     optimizer = optimizer_class(
-        [{"params": high_lr_params, "lr": max(args.learning_rate, 5e-4)}],
+        [
+            {"params": high_lr_params, "lr": 5e-4},  # LoRA + 标签编码
+            {"params": low_lr_params,  "lr": 0},  # Backbone（前 1k 步冻结）
+        ],
         betas=(args.adam_beta1, args.adam_beta2),
         weight_decay=args.adam_weight_decay,
         eps=args.adam_epsilon,
@@ -489,10 +492,7 @@ def train(args, logger):
 
                 # -------------- unfreeze backbone at 1k step --------------
                 if (not backbone_unfrozen) and global_step >= UNFREEZE_STEP:
-                    # 解冻 backbone 并动态加入优化器（低 LR）
-                    for p in backbone_params:
-                        p.requires_grad_(True)
-                    optimizer.add_param_group({"params": backbone_params, "lr": 1e-4})
+                    optimizer.param_groups[1]["lr"] = 1e-4     # 打开 backbone 学习率
                     backbone_unfrozen = True
                     logger.info(f">>> Backbone unfrozen at step {global_step}")
 
